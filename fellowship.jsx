@@ -170,6 +170,7 @@ export default function Fellowship() {
   const [attendance, setAttendance] = useState({}); // eventTypeId -> date -> memberId -> boolean
   const [adminNotes, setAdminNotes] = useState([]); // [{id, date, text}]
   const [expanded, setExpanded] = useState(() => new Set(seedFamilies.map((f) => f.id)));
+  const [activityOpenFor, setActivityOpenFor] = useState(() => new Set());
 
   // ---- load persisted data once on mount ----
   useEffect(() => {
@@ -257,6 +258,14 @@ export default function Fellowship() {
     setExpanded((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleActivityOpen = (memberId) => {
+    setActivityOpenFor((prev) => {
+      const next = new Set(prev);
+      next.has(memberId) ? next.delete(memberId) : next.add(memberId);
       return next;
     });
   };
@@ -786,25 +795,36 @@ export default function Fellowship() {
                                   </div>
                                 </div>
 
-                                <div className="flex flex-wrap gap-1.5 mb-2.5">
-                                  {activities.map((a) => {
-                                    const checked = !!(logs[mem.id] && logs[mem.id][a.id]);
-                                    return (
-                                      <button
-                                        key={a.id}
-                                        onClick={() => toggleLog(mem.id, a.id)}
-                                        className="text-xs px-2.5 py-1.5 rounded-lg transition-colors text-left"
-                                        style={{
-                                          background: checked ? "rgba(217,169,78,0.18)" : "#1B2330",
-                                          color: checked ? "#F3C969" : "#9AA5B1",
-                                          border: `1px solid ${checked ? "rgba(217,169,78,0.4)" : "rgba(255,255,255,0.06)"}`,
-                                        }}
-                                      >
-                                        {a.name}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
+                                <button
+                                  onClick={() => toggleActivityOpen(mem.id)}
+                                  className="w-full flex items-center justify-between text-xs mb-2.5 px-2.5 py-1.5 rounded-lg"
+                                  style={{ background: "#1B2330", color: "#9AA5B1" }}
+                                >
+                                  <span>പ്രവർത്തനങ്ങൾ ({activities.filter((a) => logs[mem.id] && logs[mem.id][a.id]).length}/{activities.length})</span>
+                                  {activityOpenFor.has(mem.id) ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                                </button>
+
+                                {activityOpenFor.has(mem.id) && (
+                                  <div className="flex flex-wrap gap-1.5 mb-2.5">
+                                    {activities.map((a) => {
+                                      const checked = !!(logs[mem.id] && logs[mem.id][a.id]);
+                                      return (
+                                        <button
+                                          key={a.id}
+                                          onClick={() => toggleLog(mem.id, a.id)}
+                                          className="text-xs px-2.5 py-1.5 rounded-lg transition-colors text-left"
+                                          style={{
+                                            background: checked ? "rgba(217,169,78,0.18)" : "#1B2330",
+                                            color: checked ? "#F3C969" : "#9AA5B1",
+                                            border: `1px solid ${checked ? "rgba(217,169,78,0.4)" : "rgba(255,255,255,0.06)"}`,
+                                          }}
+                                        >
+                                          {a.name}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                )}
 
                                 {/* daily notes */}
                                 <div className="pt-2.5" style={{ borderTop: "1px dashed rgba(255,255,255,0.07)" }}>
@@ -1247,6 +1267,55 @@ function AttendancePage({
 function ReportView({ families, activities, logs, notes, memberPct, familyStats, eventTypes, attendance, memberAttendanceStats, attendanceDatesFor, exportExcel, printReport }) {
   const [openFamily, setOpenFamily] = useState(null);
   const [mode, setMode] = useState("family"); // family | age | attendance
+  const [soloPrintId, setSoloPrintId] = useState(null);
+
+  useEffect(() => {
+    if (!soloPrintId) return;
+    const t = setTimeout(() => window.print(), 60);
+    const handler = () => setSoloPrintId(null);
+    window.addEventListener("afterprint", handler);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("afterprint", handler);
+    };
+  }, [soloPrintId]);
+
+  const printFamily = (familyId) => {
+    setOpenFamily(familyId);
+    setSoloPrintId(familyId);
+  };
+
+  const exportFamilyExcel = (family) => {
+    const wb = XLSX.utils.book_new();
+    const rows = family.members.map((m) => {
+      const ag = AGE_GROUPS.find((g) => g.id === m.ageGroup);
+      const row = { പേര്: m.name, "പ്രായ വിഭാഗം": ag?.label || "" };
+      activities.forEach((a) => {
+        row[a.name] = logs[m.id] && logs[m.id][a.id] ? 1 : 0;
+      });
+      row["%"] = memberPct(m.id);
+      return row;
+    });
+    if (rows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Activities");
+
+    const noteRows = [];
+    family.members.forEach((m) => (notes[m.id] || []).forEach((n) => noteRows.push({ പേര്: m.name, തീയതി: n.date, പരാമർശം: n.text })));
+    if (noteRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(noteRows), "Remarks");
+
+    const attRows = [];
+    eventTypes.forEach((et) => {
+      const dates = attendanceDatesFor(et.id);
+      family.members.forEach((m) =>
+        dates.forEach((d) => {
+          const v = attendance[et.id]?.[d]?.[m.id];
+          if (v !== undefined) attRows.push({ "ദിവസം/പരിപാടി": et.name, തീയതി: d, പേര്: m.name, ഹാജർ: v ? "ഉണ്ട്" : "ഇല്ല" });
+        })
+      );
+    });
+    if (attRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(attRows), "Attendance");
+
+    XLSX.writeFile(wb, `${family.name}.xlsx`);
+  };
 
   const exportToolbar = (
     <div className="flex gap-2 mb-4 no-print">
@@ -1345,6 +1414,7 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
       {exportToolbar}
       {modeToggle}
       {families.map((family) => {
+        if (soloPrintId && soloPrintId !== family.id) return null;
         const stats = familyStats(family);
         const byGroup = AGE_GROUPS.map((g) => ({ ...g, members: family.members.filter((m) => m.ageGroup === g.id) })).filter((g) => g.members.length > 0);
         const isOpen = openFamily === family.id;
@@ -1359,11 +1429,24 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
                   <div className="text-xs mt-0.5 num-font" style={{ color: "#9AA5B1" }}>{stats.done}/{stats.total} പ്രവർത്തനങ്ങൾ പൂർത്തിയായി</div>
                 </div>
               </div>
-              <div className="flex items-center gap-3">
-                <div className="w-28 h-2 rounded-full overflow-hidden hidden sm:block" style={{ background: "#242D3D" }}>
-                  <div className="h-full rounded-full" style={{ width: `${stats.pct}%`, background: pctColor(stats.pct) }} />
-                </div>
-                <span className="num-font text-sm font-semibold w-12 text-right" style={{ color: pctColor(stats.pct) }}>{stats.pct}%</span>
+              <div className="flex items-center gap-2 no-print">
+                <button
+                  onClick={(e) => { e.stopPropagation(); exportFamilyExcel(family); }}
+                  title="Excel ഡൗൺലോഡ്"
+                  className="p-1.5 rounded-lg"
+                  style={{ color: "#8FA876", background: "#151B26" }}
+                >
+                  <FileSpreadsheet size={14} />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); printFamily(family.id); }}
+                  title="PDF ആയി പ്രിന്റ് ചെയ്യുക"
+                  className="p-1.5 rounded-lg"
+                  style={{ color: "#D9A94E", background: "#151B26" }}
+                >
+                  <Printer size={14} />
+                </button>
+                <span className="num-font text-sm font-semibold w-10 text-right" style={{ color: pctColor(stats.pct) }}>{stats.pct}%</span>
                 {isOpen ? <ChevronUp size={18} style={{ color: "#9AA5B1" }} /> : <ChevronDown size={18} style={{ color: "#9AA5B1" }} />}
               </div>
             </button>
