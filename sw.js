@@ -1,4 +1,4 @@
-const CACHE_NAME = "fellowship-cache-v1";
+const CACHE_NAME = "fellowship-cache-v2";
 const APP_SHELL = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -17,28 +17,21 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Network-first for CDN scripts (react/babel/xlsx) so updates aren't stuck,
-// cache-first for the app shell so it still opens offline.
+// Network-first everywhere: always try to fetch the latest version (app shell
+// and CDN scripts alike) and only fall back to the cache when offline. This
+// means updates you upload to GitHub show up the next time the phone has a
+// connection, instead of getting stuck on an old cached copy.
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
 
-  const url = new URL(req.url);
-  const isAppShell = url.origin === self.location.origin;
-
-  if (isAppShell) {
-    event.respondWith(
-      caches.match(req).then((cached) => cached || fetch(req))
-    );
-  } else {
-    event.respondWith(
-      fetch(req)
-        .then((res) => {
-          const resClone = res.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(req, resClone)).catch(() => {});
-          return res;
-        })
-        .catch(() => caches.match(req))
-    );
-  }
+  event.respondWith(
+    fetch(req)
+      .then((res) => {
+        const resClone = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(req, resClone)).catch(() => {});
+        return res;
+      })
+      .catch(() => caches.match(req))
+  );
 });
