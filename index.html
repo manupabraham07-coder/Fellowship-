@@ -192,12 +192,17 @@ const AGE_GROUPS = [
   { id: "adult", label: "മുതിർന്നവർ", sub: "40+", icon: Users },
 ];
 
+const ACTIVITY_TYPES = [
+  { id: "boolean", label: "ചെയ്തോ (Yes/No)" },
+  { id: "text", label: "കുറിപ്പ് (എവിടെവരെ ആയി)" },
+  { id: "duration", label: "സമയം (മിനിറ്റ്)" },
+];
+
 const DEFAULT_ACTIVITIES = [
-  "ദിവസേന പ്രാർത്ഥന",
-  "ബൈബിൾ വായന",
-  "കുടുംബ ആരാധന",
-  "ഞായർ ആരാധനയിൽ പങ്കാളിത്തം",
-  "വചന മനഃപാഠം / പഠനം",
+  { name: "വ്യക്തിപരമായ പ്രാർത്ഥന", type: "duration" },
+  { name: "ബൈബിൾ വായന", type: "text" },
+  { name: "കുടുംബ ആരാധന", type: "boolean" },
+  { name: "വചന മനഃപാഠം / പഠനം", type: "boolean" },
 ];
 
 const DEFAULT_EVENT_TYPES = ["ഞായർ ആരാധന"];
@@ -341,7 +346,7 @@ function Fellowship() {
   const [page, setPage] = useState("home"); // home | track | report
   const [appName, setAppName] = useState("Fellowship");
   const [families, setFamilies] = useState(seedFamilies);
-  const [activities, setActivities] = useState(DEFAULT_ACTIVITIES.map((name) => ({ id: uid(), name })));
+  const [activities, setActivities] = useState(DEFAULT_ACTIVITIES.map((a) => ({ id: uid(), name: a.name, type: a.type })));
   const [logs, setLogs] = useState({}); // memberId -> activityId -> bool
   const [notes, setNotes] = useState({}); // memberId -> [{id, date, text}]
   const [eventTypes, setEventTypes] = useState(DEFAULT_EVENT_TYPES.map((name) => ({ id: uid(), name })));
@@ -407,7 +412,7 @@ function Fellowship() {
     }
     setAppName("Fellowship");
     setFamilies(seedFamilies);
-    setActivities(DEFAULT_ACTIVITIES.map((name) => ({ id: uid(), name })));
+    setActivities(DEFAULT_ACTIVITIES.map((a) => ({ id: uid(), name: a.name, type: a.type })));
     setLogs({});
     setNotes({});
     setEventTypes(DEFAULT_EVENT_TYPES.map((name) => ({ id: uid(), name })));
@@ -458,6 +463,7 @@ function Fellowship() {
     reader.readAsText(file);
   };
   const [newActivity, setNewActivity] = useState("");
+  const [newActivityType, setNewActivityType] = useState("boolean");
   const [addingMemberFor, setAddingMemberFor] = useState(null);
   const [memberDraft, setMemberDraft] = useState({ name: "", ageGroup: "adult" });
   const [newFamilyName, setNewFamilyName] = useState("");
@@ -466,10 +472,25 @@ function Fellowship() {
   const [noteDraft, setNoteDraft] = useState({ date: todayStr(), text: "" });
   const [openNotesFor, setOpenNotesFor] = useState(null); // memberId whose note history is shown
 
+  const isActivityDone = (activity, value) => {
+    const type = activity?.type || "boolean";
+    if (type === "text") return !!(value && String(value).trim());
+    if (type === "duration") return Number(value) > 0;
+    return value === true;
+  };
+
   const toggleLog = (memberId, activityId) => {
     setLogs((prev) => {
       const memberLogs = { ...(prev[memberId] || {}) };
       memberLogs[activityId] = !memberLogs[activityId];
+      return { ...prev, [memberId]: memberLogs };
+    });
+  };
+
+  const setLogValue = (memberId, activityId, value) => {
+    setLogs((prev) => {
+      const memberLogs = { ...(prev[memberId] || {}) };
+      memberLogs[activityId] = value;
       return { ...prev, [memberId]: memberLogs };
     });
   };
@@ -493,7 +514,7 @@ function Fellowship() {
   const memberPct = (memberId) => {
     const m = logs[memberId] || {};
     const total = activities.length || 1;
-    const done = activities.filter((a) => m[a.id]).length;
+    const done = activities.filter((a) => isActivityDone(a, m[a.id])).length;
     return Math.round((done / total) * 100);
   };
 
@@ -503,7 +524,7 @@ function Fellowship() {
     let done = 0;
     family.members.forEach((mem) => {
       const m = logs[mem.id] || {};
-      done += activities.filter((a) => m[a.id]).length;
+      done += activities.filter((a) => isActivityDone(a, m[a.id])).length;
     });
     return { pct: total ? Math.round((done / total) * 100) : 0, done, total };
   };
@@ -529,10 +550,11 @@ function Fellowship() {
   const addActivity = () => {
     const name = newActivity.trim();
     if (!name) return;
-    setActivities((prev) => [...prev, { id: uid(), name }]);
+    setActivities((prev) => [...prev, { id: uid(), name, type: newActivityType }]);
     setNewActivity("");
   };
   const renameActivity = (id, name) => setActivities((prev) => prev.map((a) => (a.id === id ? { ...a, name } : a)));
+  const setActivityType = (id, type) => setActivities((prev) => prev.map((a) => (a.id === id ? { ...a, type } : a)));
   const removeActivity = (id) => setActivities((prev) => prev.filter((a) => a.id !== id));
 
   const addFamily = () => {
@@ -673,7 +695,9 @@ function Fellowship() {
         const ag = AGE_GROUPS.find((g) => g.id === m.ageGroup);
         const row = { കുടുംബം: f.name, പേര്: m.name, "പ്രായ വിഭാഗം": ag?.label || "" };
         activities.forEach((a) => {
-          row[a.name] = logs[m.id] && logs[m.id][a.id] ? 1 : 0;
+          const v = logs[m.id] && logs[m.id][a.id];
+          const type = a.type || "boolean";
+          row[a.name] = type === "boolean" ? (v ? 1 : 0) : v || "";
         });
         row["%"] = memberPct(m.id);
         famRows.push(row);
@@ -925,25 +949,45 @@ function Fellowship() {
                 {activities.map((a) => (
                   <span
                     key={a.id}
-                    className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full"
+                    className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full flex-wrap"
                     style={{ background: "#242D3D", color: "#EDE7D9" }}
                   >
                     <EditableText value={a.name} onSave={(v) => renameActivity(a.id, v)} className="text-xs" />
+                    <select
+                      value={a.type || "boolean"}
+                      onChange={(e) => setActivityType(a.id, e.target.value)}
+                      className="text-[11px] rounded px-1 py-0.5 outline-none"
+                      style={{ background: "#1B2330", color: "#9AA5B1", border: "none" }}
+                    >
+                      {ACTIVITY_TYPES.map((t) => (
+                        <option key={t.id} value={t.id}>{t.label}</option>
+                      ))}
+                    </select>
                     <button onClick={() => removeActivity(a.id)} aria-label="നീക്കം ചെയ്യുക">
                       <X size={12} style={{ color: "#9AA5B1" }} />
                     </button>
                   </span>
                 ))}
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <input
                   value={newActivity}
                   onChange={(e) => setNewActivity(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && addActivity()}
                   placeholder="പുതിയ പ്രവർത്തനം ചേർക്കുക"
-                  className="flex-1 text-sm rounded-lg px-3 py-2 outline-none"
+                  className="flex-1 min-w-[140px] text-sm rounded-lg px-3 py-2 outline-none"
                   style={{ background: "#242D3D", color: "#EDE7D9", border: "1px solid rgba(217,169,78,0.2)" }}
                 />
+                <select
+                  value={newActivityType}
+                  onChange={(e) => setNewActivityType(e.target.value)}
+                  className="text-sm rounded-lg px-2 py-2 outline-none"
+                  style={{ background: "#242D3D", color: "#EDE7D9", border: "1px solid rgba(217,169,78,0.2)" }}
+                >
+                  {ACTIVITY_TYPES.map((t) => (
+                    <option key={t.id} value={t.id}>{t.label}</option>
+                  ))}
+                </select>
                 <button onClick={addActivity} className="px-3 rounded-lg flex items-center gap-1 text-sm" style={{ background: "#D9A94E", color: "#151B26" }}>
                   <Plus size={15} /> ചേർക്കുക
                 </button>
@@ -1020,23 +1064,61 @@ function Fellowship() {
                                   className="w-full flex items-center justify-between text-xs mb-2.5 px-2.5 py-1.5 rounded-lg"
                                   style={{ background: "#1B2330", color: "#9AA5B1" }}
                                 >
-                                  <span>പ്രവർത്തനങ്ങൾ ({activities.filter((a) => logs[mem.id] && logs[mem.id][a.id]).length}/{activities.length})</span>
+                                  <span>പ്രവർത്തനങ്ങൾ ({activities.filter((a) => isActivityDone(a, logs[mem.id] && logs[mem.id][a.id])).length}/{activities.length})</span>
                                   {activityOpenFor.has(mem.id) ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                                 </button>
 
                                 {activityOpenFor.has(mem.id) && (
-                                  <div className="flex flex-wrap gap-1.5 mb-2.5">
+                                  <div className="flex flex-col gap-1.5 mb-2.5">
                                     {activities.map((a) => {
-                                      const checked = !!(logs[mem.id] && logs[mem.id][a.id]);
+                                      const type = a.type || "boolean";
+                                      const value = logs[mem.id] && logs[mem.id][a.id];
+                                      const done = isActivityDone(a, value);
+
+                                      if (type === "text") {
+                                        return (
+                                          <div key={a.id} className="rounded-lg px-2.5 py-2" style={{ background: "#1B2330", border: `1px solid ${done ? "rgba(217,169,78,0.35)" : "rgba(255,255,255,0.06)"}` }}>
+                                            <div className="text-[11px] mb-1" style={{ color: done ? "#F3C969" : "#9AA5B1" }}>{a.name}</div>
+                                            <input
+                                              value={value || ""}
+                                              onChange={(e) => setLogValue(mem.id, a.id, e.target.value)}
+                                              placeholder="എവിടെവരെ ആയി എന്ന് എഴുതുക..."
+                                              className="w-full text-xs outline-none bg-transparent"
+                                              style={{ color: "#EDE7D9" }}
+                                            />
+                                          </div>
+                                        );
+                                      }
+
+                                      if (type === "duration") {
+                                        return (
+                                          <div key={a.id} className="rounded-lg px-2.5 py-2 flex items-center justify-between" style={{ background: "#1B2330", border: `1px solid ${done ? "rgba(217,169,78,0.35)" : "rgba(255,255,255,0.06)"}` }}>
+                                            <span className="text-[11px]" style={{ color: done ? "#F3C969" : "#9AA5B1" }}>{a.name}</span>
+                                            <div className="flex items-center gap-1.5">
+                                              <input
+                                                type="number"
+                                                min="0"
+                                                value={value || ""}
+                                                onChange={(e) => setLogValue(mem.id, a.id, e.target.value === "" ? "" : Number(e.target.value))}
+                                                placeholder="0"
+                                                className="w-14 text-xs text-right outline-none rounded px-1.5 py-1 num-font"
+                                                style={{ background: "#242D3D", color: "#EDE7D9", border: "1px solid rgba(217,169,78,0.2)" }}
+                                              />
+                                              <span className="text-[11px]" style={{ color: "#9AA5B1" }}>മിനിറ്റ്</span>
+                                            </div>
+                                          </div>
+                                        );
+                                      }
+
                                       return (
                                         <button
                                           key={a.id}
                                           onClick={() => toggleLog(mem.id, a.id)}
                                           className="text-xs px-2.5 py-1.5 rounded-lg transition-colors text-left"
                                           style={{
-                                            background: checked ? "rgba(217,169,78,0.18)" : "#1B2330",
-                                            color: checked ? "#F3C969" : "#9AA5B1",
-                                            border: `1px solid ${checked ? "rgba(217,169,78,0.4)" : "rgba(255,255,255,0.06)"}`,
+                                            background: done ? "rgba(217,169,78,0.18)" : "#1B2330",
+                                            color: done ? "#F3C969" : "#9AA5B1",
+                                            border: `1px solid ${done ? "rgba(217,169,78,0.4)" : "rgba(255,255,255,0.06)"}`,
                                           }}
                                         >
                                           {a.name}
@@ -1255,6 +1337,7 @@ function Fellowship() {
             attendanceDatesFor={attendanceDatesFor}
             exportExcel={exportExcel}
             printReport={printReport}
+            isActivityDone={isActivityDone}
           />
         )}
       </main>
@@ -1504,7 +1587,7 @@ function AttendancePage({
   );
 }
 
-function ReportView({ families, activities, logs, notes, memberPct, familyStats, eventTypes, attendance, memberAttendanceStats, attendanceDatesFor, exportExcel, printReport }) {
+function ReportView({ families, activities, logs, notes, memberPct, familyStats, eventTypes, attendance, memberAttendanceStats, attendanceDatesFor, exportExcel, printReport, isActivityDone }) {
   const [openFamily, setOpenFamily] = useState(null);
   const [mode, setMode] = useState("family"); // family | age | attendance
   const [soloPrintId, setSoloPrintId] = useState(null);
@@ -1531,7 +1614,9 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
       const ag = AGE_GROUPS.find((g) => g.id === m.ageGroup);
       const row = { പേര്: m.name, "പ്രായ വിഭാഗം": ag?.label || "" };
       activities.forEach((a) => {
-        row[a.name] = logs[m.id] && logs[m.id][a.id] ? 1 : 0;
+        const v = logs[m.id] && logs[m.id][a.id];
+        const type = a.type || "boolean";
+        row[a.name] = type === "boolean" ? (v ? 1 : 0) : v || "";
       });
       row["%"] = memberPct(m.id);
       return row;
@@ -1622,7 +1707,7 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
         </h2>
         {exportToolbar}
         {modeToggle}
-        <AgeGroupReport families={families} activities={activities} logs={logs} notes={notes} memberPct={memberPct} />
+        <AgeGroupReport families={families} activities={activities} logs={logs} notes={notes} memberPct={memberPct} isActivityDone={isActivityDone} />
       </div>
     );
   }
@@ -1718,10 +1803,18 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
                               <tr key={mem.id} style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
                                 <td className="py-2" style={{ color: "#EDE7D9" }}>{mem.name}</td>
                                 {activities.map((a) => {
-                                  const done = !!(logs[mem.id] && logs[mem.id][a.id]);
+                                  const v = logs[mem.id] && logs[mem.id][a.id];
+                                  const done = isActivityDone(a, v);
+                                  const type = a.type || "boolean";
                                   return (
                                     <td key={a.id} className="text-center">
-                                      <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: done ? "#F3C969" : "rgba(255,255,255,0.1)" }} />
+                                      {type === "boolean" ? (
+                                        <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: done ? "#F3C969" : "rgba(255,255,255,0.1)" }} />
+                                      ) : (
+                                        <span className="text-[11px] num-font" style={{ color: done ? "#F3C969" : "#6B7280" }}>
+                                          {v || "—"}{type === "duration" && done ? "മി" : ""}
+                                        </span>
+                                      )}
                                     </td>
                                   );
                                 })}
@@ -1847,7 +1940,7 @@ function AttendanceReport({ families, eventTypes, attendance, memberAttendanceSt
   );
 }
 
-function AgeGroupReport({ families, activities, logs, notes, memberPct }) {
+function AgeGroupReport({ families, activities, logs, notes, memberPct, isActivityDone }) {
   const [openGroup, setOpenGroup] = useState(AGE_GROUPS[0].id);
 
   return (
@@ -1917,10 +2010,18 @@ function AgeGroupReport({ families, activities, logs, notes, memberPct }) {
                               <td className="py-2" style={{ color: "#EDE7D9" }}>{mem.name}</td>
                               <td className="py-2" style={{ color: "#9AA5B1" }}>{mem.familyName}</td>
                               {activities.map((a) => {
-                                const done = !!(logs[mem.id] && logs[mem.id][a.id]);
+                                const v = logs[mem.id] && logs[mem.id][a.id];
+                                const done = isActivityDone(a, v);
+                                const type = a.type || "boolean";
                                 return (
                                   <td key={a.id} className="text-center">
-                                    <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: done ? "#F3C969" : "rgba(255,255,255,0.1)" }} />
+                                    {type === "boolean" ? (
+                                      <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: done ? "#F3C969" : "rgba(255,255,255,0.1)" }} />
+                                    ) : (
+                                      <span className="text-[11px] num-font" style={{ color: done ? "#F3C969" : "#6B7280" }}>
+                                        {v || "—"}{type === "duration" && done ? "മി" : ""}
+                                      </span>
+                                    )}
                                   </td>
                                 );
                               })}
