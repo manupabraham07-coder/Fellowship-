@@ -237,6 +237,48 @@ export default function Fellowship() {
     setAdminNotes([]);
     setExpanded(new Set(seedFamilies.map((f) => f.id)));
   };
+
+  // ---- full data backup (download / restore a .json snapshot of everything) ----
+  const backupFileRef = useRef(null);
+  const [backupMessage, setBackupMessage] = useState("");
+
+  const exportBackup = () => {
+    const data = { appName, families, activities, logs, notes, eventTypes, attendance, adminNotes, backupDate: todayStr() };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${appName}-backup-${todayStr()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const importBackup = (file) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = JSON.parse(e.target.result);
+        if (typeof data.appName === "string") setAppName(data.appName);
+        if (Array.isArray(data.families)) {
+          setFamilies(data.families);
+          setExpanded(new Set(data.families.map((f) => f.id)));
+        }
+        if (Array.isArray(data.activities)) setActivities(data.activities);
+        if (data.logs) setLogs(data.logs);
+        if (data.notes) setNotes(data.notes);
+        if (Array.isArray(data.eventTypes)) setEventTypes(data.eventTypes);
+        if (data.attendance) setAttendance(data.attendance);
+        if (Array.isArray(data.adminNotes)) setAdminNotes(data.adminNotes);
+        setBackupMessage("ബാക്കപ്പ് വിജയകരമായി പുനഃസ്ഥാപിച്ചു.");
+      } catch (err) {
+        setBackupMessage("ഈ ഫയൽ വായിക്കാൻ കഴിഞ്ഞില്ല — ശരിയായ ബാക്കപ്പ് ഫയൽ ആണോ എന്ന് നോക്കൂ.");
+      }
+      setTimeout(() => setBackupMessage(""), 4000);
+    };
+    reader.readAsText(file);
+  };
   const [newActivity, setNewActivity] = useState("");
   const [addingMemberFor, setAddingMemberFor] = useState(null);
   const [memberDraft, setMemberDraft] = useState({ name: "", ageGroup: "adult" });
@@ -1041,9 +1083,29 @@ export default function Fellowship() {
 
       <footer className="text-center text-xs pb-8 no-print" style={{ color: "#5A6270" }}>
         <p>ഡാറ്റ ഈ മൊബൈലിൽ തന്നെ സൂക്ഷിക്കപ്പെടുന്നു.{saveError && " (സേവ് ചെയ്യുന്നതിൽ പിശക് — വീണ്ടും ശ്രമിക്കുക)"}</p>
-        <button onClick={resetAllData} className="mt-2 underline underline-offset-2" style={{ color: "#6B7280" }}>
-          എല്ലാ ഡാറ്റയും മായ്ക്കുക
-        </button>
+        <div className="flex items-center justify-center gap-4 mt-3 flex-wrap">
+          <button onClick={exportBackup} className="underline underline-offset-2" style={{ color: "#8FA876" }}>
+            ബാക്കപ്പ് ഡൗൺലോഡ് ചെയ്യുക
+          </button>
+          <button onClick={() => backupFileRef.current?.click()} className="underline underline-offset-2" style={{ color: "#D9A94E" }}>
+            ബാക്കപ്പ് പുനഃസ്ഥാപിക്കുക
+          </button>
+          <input
+            ref={backupFileRef}
+            type="file"
+            accept="application/json"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) importBackup(file);
+              e.target.value = "";
+            }}
+          />
+          <button onClick={resetAllData} className="underline underline-offset-2" style={{ color: "#6B7280" }}>
+            എല്ലാ ഡാറ്റയും മായ്ക്കുക
+          </button>
+        </div>
+        {backupMessage && <p className="mt-2" style={{ color: "#F3C969" }}>{backupMessage}</p>}
       </footer>
     </div>
   );
