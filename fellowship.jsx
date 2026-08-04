@@ -259,6 +259,9 @@ export default function Fellowship() {
   const [searchQuery, setSearchQuery] = useState("");
   const [expanded, setExpanded] = useState(() => new Set(seedFamilies.map((f) => f.id)));
   const [activityOpenFor, setActivityOpenFor] = useState(() => new Set());
+  const [trash, setTrash] = useState([]); // [{id, type:'family'|'member', data, familyId?, familyName?, deletedAt}]
+  const [lastBackupDate, setLastBackupDate] = useState(null);
+  const [soloMemberPrintId, setSoloMemberPrintId] = useState(null); // {familyId, memberId} or null
 
   // ---- load persisted data once on mount ----
   useEffect(() => {
@@ -281,6 +284,8 @@ export default function Fellowship() {
           if (Array.isArray(data.adminNotes)) setAdminNotes(data.adminNotes);
           if (Array.isArray(data.weeklyHistory)) setWeeklyHistory(data.weeklyHistory);
           if (typeof data.pinCode === "string") setPinCode(data.pinCode);
+          if (Array.isArray(data.trash)) setTrash(data.trash);
+          if (typeof data.lastBackupDate === "string") setLastBackupDate(data.lastBackupDate);
         }
       } catch (e) {
         // no saved data yet — fall back to the starter families/activities above
@@ -300,7 +305,7 @@ export default function Fellowship() {
       try {
         await window.storage.set(
           STORAGE_KEY,
-          JSON.stringify({ appName, families, activities, logs, notes, eventTypes, attendance, adminNotes, weeklyHistory, pinCode }),
+          JSON.stringify({ appName, families, activities, logs, notes, eventTypes, attendance, adminNotes, weeklyHistory, pinCode, trash, lastBackupDate }),
           false
         );
         setSaveError(false);
@@ -308,7 +313,7 @@ export default function Fellowship() {
         setSaveError(true);
       }
     })();
-  }, [loaded, appName, families, activities, logs, notes, eventTypes, attendance, adminNotes, weeklyHistory, pinCode]);
+  }, [loaded, appName, families, activities, logs, notes, eventTypes, attendance, adminNotes, weeklyHistory, pinCode, trash, lastBackupDate]);
 
   const resetAllData = async () => {
     if (!window.confirm("എല്ലാ ഡാറ്റയും മായ്ക്കണോ? ഇത് തിരികെ ലഭിക്കില്ല.")) return;
@@ -346,6 +351,7 @@ export default function Fellowship() {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setLastBackupDate(todayStr());
   };
 
   const importBackup = (file) => {
@@ -508,7 +514,11 @@ export default function Fellowship() {
     setShowAddFamily(false);
   };
   const renameFamily = (id, name) => setFamilies((prev) => prev.map((f) => (f.id === id ? { ...f, name } : f)));
-  const removeFamily = (id) => setFamilies((prev) => prev.filter((f) => f.id !== id));
+  const removeFamily = (id) => {
+    const fam = families.find((f) => f.id === id);
+    if (fam) setTrash((prev) => [{ id: uid(), type: "family", data: fam, deletedAt: todayStr() }, ...prev].slice(0, 20));
+    setFamilies((prev) => prev.filter((f) => f.id !== id));
+  };
 
   const addMember = (familyId) => {
     const name = memberDraft.name.trim();
@@ -547,8 +557,78 @@ export default function Fellowship() {
         f.id === familyId ? { ...f, members: f.members.map((m) => (m.id === memberId ? { ...m, photo } : m)) } : f
       )
     );
-  const removeMember = (familyId, memberId) =>
+  const removeMember = (familyId, memberId) => {
+    const fam = families.find((f) => f.id === familyId);
+    const mem = fam?.members.find((m) => m.id === memberId);
+    if (mem) {
+      setTrash((prev) =>
+        [{ id: uid(), type: "member", data: mem, familyId, familyName: fam.name, deletedAt: todayStr() }, ...prev].slice(0, 20)
+      );
+    }
     setFamilies((prev) => prev.map((f) => (f.id === familyId ? { ...f, members: f.members.filter((m) => m.id !== memberId) } : f)));
+  };
+
+  const restoreTrashItem = (trashId) => {
+    const item = trash.find((t) => t.id === trashId);
+    if (!item) return;
+    if (item.type === "family") {
+      setFamilies((prev) => [...prev, item.data]);
+    } else if (item.type === "member") {
+      setFamilies((prev) =>
+        prev.map((f) => (f.id === item.familyId ? { ...f, members: [...f.members, item.data] } : f))
+      );
+    }
+    setTrash((prev) => prev.filter((t) => t.id !== trashId));
+  };
+  const permanentlyDeleteTrashItem = (trashId) => setTrash((prev) => prev.filter((t) => t.id !== trashId));
+
+  const markAllDone = (memberId) => {
+    setLogs((prev) => {
+      const memberLogs = { ...(prev[memberId] || {}) };
+      activities.forEach((a) => {
+        if ((a.type || "boolean") === "boolean") memberLogs[a.id] = true;
+      });
+      return { ...prev, [memberId]: memberLogs };
+    });
+  };
+
+  const exportMemberExcel = (family, member) => {
+    const wb = XLSX.utils.book_new();
+    const ag = AGE_GROUPS.find((g) => g.id === member.ageGroup);
+    const row = { പേര്: member.name, കുടുംബം: family.name, "പ്രായ വിഭാഗം": ag?.label || "" };
+    activities.forEach((a) => {
+      const v = logs[member.id] && logs[member.id][a.id];
+      const type = a.type || "boolean";
+      row[a.name] = type === "boolean" ? (v ? 1 : 0) : v || "";
+    });
+    row["%"] = memberPct(member.id);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([row]), "Activities");
+
+    const noteRows = (notes[member.id] || []).map((n) => ({ തീയതി: n.date, പരാമർശം: n.text }));
+    if (noteRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(noteRows), "Remarks");
+
+    const attRows = [];
+    eventTypes.forEach((et) => {
+      attendanceDatesFor(et.id).forEach((d) => {
+        const v = attendance[et.id]?.[d]?.[member.id];
+        if (v !== undefined) attRows.push({ "ദിവസം/പരിപാടി": et.name, തീയതി: d, ഹാജർ: v ? "ഉണ്ട്" : "ഇല്ല" });
+      });
+    });
+    if (attRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(attRows), "Attendance");
+
+    XLSX.writeFile(wb, `${member.name}.xlsx`);
+  };
+
+  useEffect(() => {
+    if (!soloMemberPrintId) return;
+    const t = setTimeout(() => window.print(), 60);
+    const handler = () => setSoloMemberPrintId(null);
+    window.addEventListener("afterprint", handler);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("afterprint", handler);
+    };
+  }, [soloMemberPrintId]);
 
   // ---- notes ----
   const saveNote = (memberId) => {
@@ -748,8 +828,73 @@ export default function Fellowship() {
     return <PinLockScreen pinCode={pinCode} onUnlock={() => setPinUnlocked(true)} appName={appName} shellStyle={shellStyle} fontImports={fontImports} />;
   }
 
+  if (soloMemberPrintId) {
+    const fam = families.find((f) => f.id === soloMemberPrintId.familyId);
+    const mem = fam?.members.find((m) => m.id === soloMemberPrintId.memberId);
+    if (!fam || !mem) {
+      setSoloMemberPrintId(null);
+    } else {
+      const ag = AGE_GROUPS.find((g) => g.id === mem.ageGroup);
+      return (
+        <div className="min-h-screen w-full print-area" style={shellStyle}>
+          {fontImports}
+          <div className="max-w-md mx-auto px-6 py-8">
+            <h1 className="display-font text-2xl mb-1" style={{ color: "#EDE7D9" }}>{mem.name}</h1>
+            <p className="text-sm mb-6" style={{ color: "#9AA5B1" }}>{fam.name} · {ag?.label}</p>
+
+            <h2 className="text-sm font-medium mb-2" style={{ color: "#D9A94E" }}>പ്രവർത്തനങ്ങൾ</h2>
+            <div className="space-y-1.5 mb-6">
+              {activities.map((a) => {
+                const v = logs[mem.id] && logs[mem.id][a.id];
+                const done = isActivityDone(a, v);
+                const type = a.type || "boolean";
+                return (
+                  <div key={a.id} className="flex items-center justify-between text-sm">
+                    <span style={{ color: "#EDE7D9" }}>{a.name}</span>
+                    <span className="num-font" style={{ color: done ? "#8FA876" : "#6B7280" }}>
+                      {type === "boolean" ? (done ? "✓" : "✗") : v || "—"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {eventTypes.map((et) => {
+              const stats = memberAttendanceStats(et.id, mem.id);
+              if (!stats.marked) return null;
+              return (
+                <div key={et.id} className="text-sm mb-1.5">
+                  <span style={{ color: "#9AA5B1" }}>{et.name}: </span>
+                  <span className="num-font" style={{ color: "#EDE7D9" }}>{stats.present}/{stats.marked} ({stats.pct}%)</span>
+                </div>
+              );
+            })}
+
+            {(notes[mem.id] || []).length > 0 && (
+              <>
+                <h2 className="text-sm font-medium mt-6 mb-2" style={{ color: "#D9A94E" }}>പരാമർശങ്ങൾ</h2>
+                <div className="space-y-2">
+                  {(notes[mem.id] || []).map((n) => (
+                    <div key={n.id} className="text-sm">
+                      <span className="num-font" style={{ color: "#D9A94E" }}>{fmtDate(n.date)}: </span>
+                      <span style={{ color: "#EDE7D9" }}>{n.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      );
+    }
+  }
+
   // ---------------- FRONT PAGE ----------------
   if (page === "home") {
+    const daysSinceBackup = lastBackupDate
+      ? Math.floor((new Date(todayStr()) - new Date(lastBackupDate)) / 86400000)
+      : null;
+    const showBackupReminder = daysSinceBackup === null || daysSinceBackup >= 7;
     return (
       <div className="min-h-screen w-full flex items-center justify-center px-6" style={shellStyle}>
         {fontImports}
@@ -793,6 +938,17 @@ export default function Fellowship() {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {showBackupReminder && (
+            <div className="rounded-xl p-4 card-edge mb-8 text-left flex items-center justify-between gap-3" style={{ background: "rgba(193,101,61,0.12)", borderColor: "rgba(193,101,61,0.3)" }}>
+              <div className="text-xs" style={{ color: "#EDE7D9" }}>
+                {lastBackupDate ? `${daysSinceBackup} ദിവസമായി ബാക്കപ്പ് എടുത്തിട്ടില്ല.` : "ഇതുവരെ ബാക്കപ്പ് എടുത്തിട്ടില്ല."}
+              </div>
+              <button onClick={exportBackup} className="text-xs px-3 py-1.5 rounded-lg shrink-0" style={{ background: "#D9A94E", color: "#151B26" }}>
+                ബാക്കപ്പ് ചെയ്യുക
+              </button>
             </div>
           )}
 
@@ -1100,12 +1256,25 @@ export default function Fellowship() {
                                   </div>
                                   <div className="flex items-center gap-2">
                                     <span className="num-font text-xs" style={{ color: pctColor(mPct) }}>{mPct}%</span>
+                                    <button onClick={() => exportMemberExcel(family, mem)} title="Excel ഡൗൺലോഡ്">
+                                      <FileSpreadsheet size={13} style={{ color: "#8FA876" }} />
+                                    </button>
+                                    <button onClick={() => setSoloMemberPrintId({ familyId: family.id, memberId: mem.id })} title="PDF ആയി പ്രിന്റ് ചെയ്യുക">
+                                      <Printer size={13} style={{ color: "#D9A94E" }} />
+                                    </button>
                                     <button onClick={() => removeMember(family.id, mem.id)}>
                                       <Trash2 size={13} style={{ color: "#6B7280" }} />
                                     </button>
                                   </div>
                                 </div>
 
+                                <button
+                                  onClick={() => markAllDone(mem.id)}
+                                  className="text-[11px] mb-2 flex items-center gap-1"
+                                  style={{ color: "#8FA876" }}
+                                >
+                                  <Check size={11} /> എല്ലാം ചെയ്തു എന്ന് അടയാളപ്പെടുത്തുക
+                                </button>
 
                                 <button
                                   onClick={() => toggleActivityOpen(mem.id)}
@@ -1373,6 +1542,9 @@ export default function Fellowship() {
             pinCode={pinCode}
             setNewPin={setNewPin}
             removePin={removePin}
+            trash={trash}
+            restoreTrashItem={restoreTrashItem}
+            permanentlyDeleteTrashItem={permanentlyDeleteTrashItem}
           />
         ) : (
           <ReportView
@@ -1424,7 +1596,7 @@ export default function Fellowship() {
   );
 }
 
-function AdminPage({ adminNotes, adminDraft, setAdminDraft, addAdminNote, editAdminNote, deleteAdminNote, pinCode, setNewPin, removePin }) {
+function AdminPage({ adminNotes, adminDraft, setAdminDraft, addAdminNote, editAdminNote, deleteAdminNote, pinCode, setNewPin, removePin, trash, restoreTrashItem, permanentlyDeleteTrashItem }) {
   const [pinDraft, setPinDraft] = useState("");
 
   const savePin = () => {
@@ -1468,6 +1640,39 @@ function AdminPage({ adminNotes, adminDraft, setAdminDraft, addAdminNote, editAd
             <button onClick={savePin} className="px-3 rounded-lg text-sm" style={{ background: "#D9A94E", color: "#151B26" }}>
               സെറ്റ് ചെയ്യുക
             </button>
+          </div>
+        )}
+      </section>
+
+      <section className="mb-8 rounded-2xl p-5 card-edge" style={{ background: "#1B2330" }}>
+        <h2 className="display-font text-lg mb-2" style={{ color: "#EDE7D9" }}>
+          Trash — ഈയിടെ ഡിലീറ്റ് ചെയ്തവ
+        </h2>
+        <p className="text-xs mb-3" style={{ color: "#9AA5B1" }}>
+          ഡിലീറ്റ് ചെയ്ത കുടുംബങ്ങളും അംഗങ്ങളും (അവസാനത്തെ 20) ഇവിടെ കുറച്ച് കാലം സൂക്ഷിക്കും, തിരികെ വേണമെങ്കിൽ പുനഃസ്ഥാപിക്കാം.
+        </p>
+        {trash.length === 0 ? (
+          <p className="text-xs" style={{ color: "#6B7280" }}>Trash ശൂന്യമാണ്.</p>
+        ) : (
+          <div className="space-y-2">
+            {trash.map((t) => (
+              <div key={t.id} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: "#151B26" }}>
+                <div className="text-xs">
+                  <span style={{ color: "#EDE7D9" }}>
+                    {t.type === "family" ? `${t.data.name} (കുടുംബം)` : `${t.data.name} (${t.familyName})`}
+                  </span>
+                  <span className="num-font ml-2" style={{ color: "#6B7280" }}>{fmtDate(t.deletedAt)}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => restoreTrashItem(t.id)} className="text-xs underline underline-offset-2" style={{ color: "#8FA876" }}>
+                    പുനഃസ്ഥാപിക്കുക
+                  </button>
+                  <button onClick={() => permanentlyDeleteTrashItem(t.id)} className="text-xs underline underline-offset-2" style={{ color: "#C1653D" }}>
+                    എന്നേക്കും മായ്ക്കുക
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </section>
