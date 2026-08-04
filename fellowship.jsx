@@ -1945,20 +1945,20 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
   };
 
   const exportToolbar = (
-    <div className="flex gap-2 mb-4 no-print">
+    <div className="flex gap-2 mb-4 no-print flex-wrap">
       <button
         onClick={exportExcel}
         className="px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 card-edge"
         style={{ color: "#8FA876", background: "#1B2330" }}
       >
-        <FileSpreadsheet size={13} /> Excel ഡൗൺലോഡ്
+        <FileSpreadsheet size={13} /> എല്ലാ കുടുംബങ്ങളും — Excel
       </button>
       <button
         onClick={printReport}
         className="px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 card-edge"
         style={{ color: "#D9A94E", background: "#1B2330" }}
       >
-        <Printer size={13} /> PDF ആയി പ്രിന്റ് ചെയ്യുക
+        <Printer size={13} /> എല്ലാ കുടുംബങ്ങളും — PDF
       </button>
     </div>
   );
@@ -2083,7 +2083,7 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
               <div className="flex items-center gap-2 no-print">
                 <button
                   onClick={(e) => { e.stopPropagation(); exportFamilyExcel(family); }}
-                  title="Excel ഡൗൺലോഡ്"
+                  title={`${family.name} മാത്രം — Excel`}
                   className="p-1.5 rounded-lg"
                   style={{ color: "#8FA876", background: "#151B26" }}
                 >
@@ -2091,7 +2091,7 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
                 </button>
                 <button
                   onClick={(e) => { e.stopPropagation(); printFamily(family.id); }}
-                  title="PDF ആയി പ്രിന്റ് ചെയ്യുക"
+                  title={`${family.name} മാത്രം — PDF`}
                   className="p-1.5 rounded-lg"
                   style={{ color: "#D9A94E", background: "#151B26" }}
                 >
