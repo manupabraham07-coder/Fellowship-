@@ -4,6 +4,7 @@ import {
   Flame, Plus, X, Users, ChevronDown, ChevronUp, BarChart3, Baby, UserRound,
   Sparkles, Trash2, Pencil, Check, NotebookPen, ArrowRight, Home, CalendarDays,
   ClipboardCheck, UserCheck, UserX, Minus, FileText, FileSpreadsheet, Printer,
+  Search, Archive, Cake, Lock,
 } from "lucide-react";
 
 // ---------------- constants ----------------
@@ -34,6 +35,43 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
 const fmtDate = (d) => {
   const dt = new Date(d + "T00:00:00");
   return dt.toLocaleDateString("ml-IN", { day: "numeric", month: "short", year: "numeric" });
+};
+
+// Shrinks an uploaded photo to a small square before storing it, so photos
+// don't bloat the saved data.
+const resizeImageFile = (file, maxSize = 160) =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        const side = Math.min(img.width, img.height);
+        canvas.width = maxSize;
+        canvas.height = maxSize;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, maxSize, maxSize);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+// Days until a member's next birthday, ignoring the year (or null if unset).
+const daysToNextBirthday = (birthday) => {
+  if (!birthday) return null;
+  const parts = birthday.split("-");
+  if (parts.length < 3) return null;
+  const [, mm, dd] = parts;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  let next = new Date(today.getFullYear(), Number(mm) - 1, Number(dd));
+  next.setHours(0, 0, 0, 0);
+  if (next < today) next = new Date(today.getFullYear() + 1, Number(mm) - 1, Number(dd));
+  return Math.round((next - today) / 86400000);
 };
 
 const seedFamilies = [
@@ -159,6 +197,47 @@ function EditableText({ value, onSave, className, style, inputStyle, placeholder
   );
 }
 
+// ---------------- PIN lock screen ----------------
+function PinLockScreen({ pinCode, onUnlock, appName, shellStyle, fontImports }) {
+  const [input, setInput] = useState("");
+  const [error, setError] = useState(false);
+
+  const submit = () => {
+    if (input === pinCode) {
+      onUnlock();
+    } else {
+      setError(true);
+      setInput("");
+      setTimeout(() => setError(false), 1500);
+    }
+  };
+
+  return (
+    <div className="min-h-screen w-full flex items-center justify-center px-6" style={shellStyle}>
+      {fontImports}
+      <div className="max-w-xs w-full text-center">
+        <Logo size={64} pct={40} />
+        <h1 className="display-font text-xl mt-4 mb-1" style={{ color: "#EDE7D9" }}>{appName}</h1>
+        <p className="text-xs mb-5" style={{ color: "#9AA5B1" }}>PIN നൽകുക</p>
+        <input
+          type="password"
+          inputMode="numeric"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && submit()}
+          autoFocus
+          className="w-full text-center text-lg tracking-widest rounded-xl px-3 py-3 outline-none mb-3 num-font"
+          style={{ background: "#1B2330", color: "#EDE7D9", border: `1px solid ${error ? "#C1653D" : "rgba(217,169,78,0.3)"}` }}
+        />
+        {error && <p className="text-xs mb-3" style={{ color: "#C1653D" }}>തെറ്റായ PIN — വീണ്ടും ശ്രമിക്കൂ</p>}
+        <button onClick={submit} className="w-full py-3 rounded-xl text-sm font-medium" style={{ background: "#D9A94E", color: "#151B26" }}>
+          തുറക്കുക
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ---------------- app ----------------
 const STORAGE_KEY = "fellowship-state";
 
@@ -174,6 +253,10 @@ export default function Fellowship() {
   const [eventTypes, setEventTypes] = useState(DEFAULT_EVENT_TYPES.map((name) => ({ id: uid(), name })));
   const [attendance, setAttendance] = useState({}); // eventTypeId -> date -> memberId -> boolean
   const [adminNotes, setAdminNotes] = useState([]); // [{id, date, text}]
+  const [weeklyHistory, setWeeklyHistory] = useState([]); // [{id, date, entries:[{familyId, familyName, pct}]}]
+  const [pinCode, setPinCode] = useState(null);
+  const [pinUnlocked, setPinUnlocked] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [expanded, setExpanded] = useState(() => new Set(seedFamilies.map((f) => f.id)));
   const [activityOpenFor, setActivityOpenFor] = useState(() => new Set());
 
@@ -196,6 +279,8 @@ export default function Fellowship() {
           if (Array.isArray(data.eventTypes)) setEventTypes(data.eventTypes);
           if (data.attendance) setAttendance(data.attendance);
           if (Array.isArray(data.adminNotes)) setAdminNotes(data.adminNotes);
+          if (Array.isArray(data.weeklyHistory)) setWeeklyHistory(data.weeklyHistory);
+          if (typeof data.pinCode === "string") setPinCode(data.pinCode);
         }
       } catch (e) {
         // no saved data yet — fall back to the starter families/activities above
@@ -215,7 +300,7 @@ export default function Fellowship() {
       try {
         await window.storage.set(
           STORAGE_KEY,
-          JSON.stringify({ appName, families, activities, logs, notes, eventTypes, attendance, adminNotes }),
+          JSON.stringify({ appName, families, activities, logs, notes, eventTypes, attendance, adminNotes, weeklyHistory, pinCode }),
           false
         );
         setSaveError(false);
@@ -223,7 +308,7 @@ export default function Fellowship() {
         setSaveError(true);
       }
     })();
-  }, [loaded, appName, families, activities, logs, notes, eventTypes, attendance, adminNotes]);
+  }, [loaded, appName, families, activities, logs, notes, eventTypes, attendance, adminNotes, weeklyHistory, pinCode]);
 
   const resetAllData = async () => {
     if (!window.confirm("എല്ലാ ഡാറ്റയും മായ്ക്കണോ? ഇത് തിരികെ ലഭിക്കില്ല.")) return;
@@ -240,6 +325,9 @@ export default function Fellowship() {
     setEventTypes(DEFAULT_EVENT_TYPES.map((name) => ({ id: uid(), name })));
     setAttendance({});
     setAdminNotes([]);
+    setWeeklyHistory([]);
+    setPinCode(null);
+    setPinUnlocked(false);
     setExpanded(new Set(seedFamilies.map((f) => f.id)));
   };
 
@@ -248,7 +336,7 @@ export default function Fellowship() {
   const [backupMessage, setBackupMessage] = useState("");
 
   const exportBackup = () => {
-    const data = { appName, families, activities, logs, notes, eventTypes, attendance, adminNotes, backupDate: todayStr() };
+    const data = { appName, families, activities, logs, notes, eventTypes, attendance, adminNotes, weeklyHistory, pinCode, backupDate: todayStr() };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -276,6 +364,8 @@ export default function Fellowship() {
         if (Array.isArray(data.eventTypes)) setEventTypes(data.eventTypes);
         if (data.attendance) setAttendance(data.attendance);
         if (Array.isArray(data.adminNotes)) setAdminNotes(data.adminNotes);
+        if (Array.isArray(data.weeklyHistory)) setWeeklyHistory(data.weeklyHistory);
+        if (typeof data.pinCode === "string" || data.pinCode === null) setPinCode(data.pinCode ?? null);
         setBackupMessage("ബാക്കപ്പ് വിജയകരമായി പുനഃസ്ഥാപിച്ചു.");
       } catch (err) {
         setBackupMessage("ഈ ഫയൽ വായിക്കാൻ കഴിഞ്ഞില്ല — ശരിയായ ബാക്കപ്പ് ഫയൽ ആണോ എന്ന് നോക്കൂ.");
@@ -284,6 +374,24 @@ export default function Fellowship() {
     };
     reader.readAsText(file);
   };
+
+  // ---- weekly history archive ----
+  const archiveWeek = () => {
+    const alsoReset = window.confirm(
+      "ഈ ആഴ്ചത്തെ പുരോഗതി ചരിത്രത്തിൽ സൂക്ഷിക്കാം. അതിനുശേഷം ബോക്സുകൾ പുതുതായി (ശൂന്യമായി) തുടങ്ങണോ?\n\nശരി = ചരിത്രത്തിൽ സൂക്ഷിച്ച് പുതുതായി തുടങ്ങുക\nCancel = ചരിത്രത്തിൽ സൂക്ഷിക്കുക മാത്രം ചെയ്യുക"
+    );
+    const entries = families.map((f) => ({ familyId: f.id, familyName: f.name, pct: familyStats(f).pct }));
+    setWeeklyHistory((prev) => [...prev, { id: uid(), date: todayStr(), entries }]);
+    if (alsoReset) setLogs({});
+  };
+
+  // ---- PIN lock ----
+  const setNewPin = (pin) => setPinCode(pin);
+  const removePin = () => {
+    setPinCode(null);
+    setPinUnlocked(true);
+  };
+
   const [newActivity, setNewActivity] = useState("");
   const [newActivityType, setNewActivityType] = useState("boolean");
   const [addingMemberFor, setAddingMemberFor] = useState(null);
@@ -368,6 +476,17 @@ export default function Fellowship() {
     };
   }, [families, logs, activities]);
 
+  const upcomingBirthdays = useMemo(() => {
+    const list = [];
+    families.forEach((f) => {
+      f.members.forEach((m) => {
+        const days = daysToNextBirthday(m.birthday);
+        if (days !== null && days <= 30) list.push({ ...m, familyName: f.name, daysLeft: days });
+      });
+    });
+    return list.sort((a, b) => a.daysLeft - b.daysLeft).slice(0, 6);
+  }, [families]);
+
   // ---- mutations ----
   const addActivity = () => {
     const name = newActivity.trim();
@@ -414,6 +533,18 @@ export default function Fellowship() {
     setFamilies((prev) =>
       prev.map((f) =>
         f.id === familyId ? { ...f, members: f.members.map((m) => (m.id === memberId ? { ...m, ageGroup } : m)) } : f
+      )
+    );
+  const setMemberBirthday = (familyId, memberId, birthday) =>
+    setFamilies((prev) =>
+      prev.map((f) =>
+        f.id === familyId ? { ...f, members: f.members.map((m) => (m.id === memberId ? { ...m, birthday } : m)) } : f
+      )
+    );
+  const setMemberPhoto = (familyId, memberId, photo) =>
+    setFamilies((prev) =>
+      prev.map((f) =>
+        f.id === familyId ? { ...f, members: f.members.map((m) => (m.id === memberId ? { ...m, photo } : m)) } : f
       )
     );
   const removeMember = (familyId, memberId) =>
@@ -613,6 +744,10 @@ export default function Fellowship() {
     );
   }
 
+  if (pinCode && !pinUnlocked) {
+    return <PinLockScreen pinCode={pinCode} onUnlock={() => setPinUnlocked(true)} appName={appName} shellStyle={shellStyle} fontImports={fontImports} />;
+  }
+
   // ---------------- FRONT PAGE ----------------
   if (page === "home") {
     return (
@@ -642,6 +777,24 @@ export default function Fellowship() {
               </div>
             ))}
           </div>
+
+          {upcomingBirthdays.length > 0 && (
+            <div className="rounded-xl p-4 card-edge mb-8 text-left" style={{ background: "#1B2330" }}>
+              <div className="text-xs font-medium mb-2.5 flex items-center gap-1.5" style={{ color: "#D9A94E" }}>
+                <Cake size={13} /> അടുത്ത പിറന്നാളുകൾ
+              </div>
+              <div className="space-y-1.5">
+                {upcomingBirthdays.map((m) => (
+                  <div key={m.id} className="flex items-center justify-between text-xs">
+                    <span style={{ color: "#EDE7D9" }}>{m.name} <span style={{ color: "#6B7280" }}>({m.familyName})</span></span>
+                    <span className="num-font" style={{ color: "#9AA5B1" }}>
+                      {m.daysLeft === 0 ? "ഇന്ന്!" : m.daysLeft === 1 ? "നാളെ" : `${m.daysLeft} ദിവസം`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="flex flex-col gap-3">
             <button
@@ -816,11 +969,48 @@ export default function Fellowship() {
               </div>
             </section>
 
+            {/* search + archive */}
+            <div className="flex gap-2 mb-4 flex-wrap items-center">
+              <div className="flex-1 min-w-[160px] flex items-center gap-2 rounded-lg px-3 py-2 card-edge" style={{ background: "#1B2330" }}>
+                <Search size={14} style={{ color: "#9AA5B1" }} />
+                <input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="പേര് സേർച്ച് ചെയ്യുക..."
+                  className="flex-1 text-sm outline-none bg-transparent"
+                  style={{ color: "#EDE7D9" }}
+                />
+                {searchQuery && (
+                  <button onClick={() => setSearchQuery("")}>
+                    <X size={13} style={{ color: "#9AA5B1" }} />
+                  </button>
+                )}
+              </div>
+              <button
+                onClick={archiveWeek}
+                className="px-3 py-2 rounded-lg text-xs flex items-center gap-1.5 card-edge"
+                style={{ color: "#D9A94E", background: "#1B2330" }}
+              >
+                <Archive size={13} /> ആഴ്ച ആർക്കൈവ് ചെയ്യുക
+              </button>
+            </div>
+
             {/* families */}
             <div className="space-y-4">
-              {families.map((family) => {
+              {families
+                .map((family) => {
+                  const q = searchQuery.trim().toLowerCase();
+                  if (!q) return family;
+                  const familyMatches = family.name.toLowerCase().includes(q);
+                  const matchingMembers = family.members.filter((m) => m.name.toLowerCase().includes(q));
+                  if (familyMatches) return family;
+                  if (matchingMembers.length > 0) return { ...family, members: matchingMembers };
+                  return null;
+                })
+                .filter(Boolean)
+                .map((family) => {
                 const stats = familyStats(family);
-                const isOpen = expanded.has(family.id);
+                const isOpen = expanded.has(family.id) || !!searchQuery.trim();
                 return (
                   <div key={family.id} className="rounded-2xl card-edge overflow-hidden" style={{ background: "#1B2330" }}>
                     <div className="w-full flex items-center justify-between px-5 py-4">
@@ -857,8 +1047,33 @@ export default function Fellowship() {
                             return (
                               <div key={mem.id} className="rounded-xl p-3.5" style={{ background: "#151B26" }}>
                                 <div className="flex items-center justify-between mb-2.5 flex-wrap gap-2">
-                                  <div className="flex items-center gap-2">
-                                    <Icon size={15} style={{ color: "#D9A94E" }} />
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <label htmlFor={`photo-${mem.id}`} className="relative shrink-0 cursor-pointer">
+                                      {mem.photo ? (
+                                        <img src={mem.photo} alt={mem.name} className="w-7 h-7 rounded-full object-cover" style={{ border: "1px solid rgba(217,169,78,0.4)" }} />
+                                      ) : (
+                                        <span className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background: "#242D3D" }}>
+                                          <Icon size={13} style={{ color: "#D9A94E" }} />
+                                        </span>
+                                      )}
+                                    </label>
+                                    <input
+                                      id={`photo-${mem.id}`}
+                                      type="file"
+                                      accept="image/*"
+                                      style={{ display: "none" }}
+                                      onChange={async (e) => {
+                                        const file = e.target.files?.[0];
+                                        if (!file) return;
+                                        try {
+                                          const dataUrl = await resizeImageFile(file);
+                                          setMemberPhoto(family.id, mem.id, dataUrl);
+                                        } catch (err) {
+                                          window.alert("ഫോട്ടോ ചേർക്കാൻ കഴിഞ്ഞില്ല.");
+                                        }
+                                        e.target.value = "";
+                                      }}
+                                    />
                                     <span className="text-sm font-medium" style={{ color: "#EDE7D9" }}>
                                       <EditableText value={mem.name} onSave={(v) => renameMember(family.id, mem.id, v)} />
                                     </span>
@@ -872,6 +1087,16 @@ export default function Fellowship() {
                                         <option key={g.id} value={g.id}>{g.label}</option>
                                       ))}
                                     </select>
+                                    <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full" style={{ background: "#242D3D", color: "#9AA5B1" }}>
+                                      🎂
+                                      <input
+                                        type="date"
+                                        value={mem.birthday || ""}
+                                        onChange={(e) => setMemberBirthday(family.id, mem.id, e.target.value)}
+                                        className="outline-none num-font"
+                                        style={{ background: "transparent", color: "#9AA5B1", colorScheme: "dark", border: "none", width: "92px" }}
+                                      />
+                                    </span>
                                   </div>
                                   <div className="flex items-center gap-2">
                                     <span className="num-font text-xs" style={{ color: pctColor(mPct) }}>{mPct}%</span>
@@ -880,6 +1105,7 @@ export default function Fellowship() {
                                     </button>
                                   </div>
                                 </div>
+
 
                                 <button
                                   onClick={() => toggleActivityOpen(mem.id)}
@@ -1144,6 +1370,9 @@ export default function Fellowship() {
             addAdminNote={addAdminNote}
             editAdminNote={editAdminNote}
             deleteAdminNote={deleteAdminNote}
+            pinCode={pinCode}
+            setNewPin={setNewPin}
+            removePin={removePin}
           />
         ) : (
           <ReportView
@@ -1160,6 +1389,7 @@ export default function Fellowship() {
             exportExcel={exportExcel}
             printReport={printReport}
             isActivityDone={isActivityDone}
+            weeklyHistory={weeklyHistory}
           />
         )}
       </main>
@@ -1194,9 +1424,54 @@ export default function Fellowship() {
   );
 }
 
-function AdminPage({ adminNotes, adminDraft, setAdminDraft, addAdminNote, editAdminNote, deleteAdminNote }) {
+function AdminPage({ adminNotes, adminDraft, setAdminDraft, addAdminNote, editAdminNote, deleteAdminNote, pinCode, setNewPin, removePin }) {
+  const [pinDraft, setPinDraft] = useState("");
+
+  const savePin = () => {
+    const v = pinDraft.trim();
+    if (v.length < 4) {
+      window.alert("PIN കുറഞ്ഞത് 4 അക്കം എങ്കിലും വേണം.");
+      return;
+    }
+    setNewPin(v);
+    setPinDraft("");
+  };
+
   return (
     <div>
+      <section className="mb-8 rounded-2xl p-5 card-edge" style={{ background: "#1B2330" }}>
+        <h2 className="display-font text-lg mb-2" style={{ color: "#EDE7D9" }}>
+          PIN സംരക്ഷണം
+        </h2>
+        <p className="text-xs mb-3" style={{ color: "#9AA5B1" }}>
+          ആപ്പ് തുറക്കുമ്പോൾ ആദ്യം PIN ചോദിക്കാൻ ഇത് സെറ്റ് ചെയ്യാം. ഇത് ഒരു ലളിതമായ സ്ക്രീൻ ലോക്ക് മാത്രമാണ്, ശക്തമായ സുരക്ഷയല്ല.
+        </p>
+        {pinCode ? (
+          <div className="flex items-center gap-3">
+            <span className="text-sm" style={{ color: "#8FA876" }}>PIN സെറ്റ് ചെയ്തിട്ടുണ്ട്</span>
+            <button onClick={removePin} className="text-xs underline underline-offset-2" style={{ color: "#C1653D" }}>
+              PIN നീക്കം ചെയ്യുക
+            </button>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <input
+              type="password"
+              inputMode="numeric"
+              value={pinDraft}
+              onChange={(e) => setPinDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && savePin()}
+              placeholder="4+ അക്ക PIN"
+              className="flex-1 text-sm rounded-lg px-3 py-2 outline-none num-font"
+              style={{ background: "#242D3D", color: "#EDE7D9", border: "1px solid rgba(217,169,78,0.2)" }}
+            />
+            <button onClick={savePin} className="px-3 rounded-lg text-sm" style={{ background: "#D9A94E", color: "#151B26" }}>
+              സെറ്റ് ചെയ്യുക
+            </button>
+          </div>
+        )}
+      </section>
+
       <h2 className="display-font text-xl mb-4" style={{ color: "#EDE7D9" }}>
         അഡ്മിൻ കുറിപ്പുകൾ
       </h2>
@@ -1409,7 +1684,7 @@ function AttendancePage({
   );
 }
 
-function ReportView({ families, activities, logs, notes, memberPct, familyStats, eventTypes, attendance, memberAttendanceStats, attendanceDatesFor, exportExcel, printReport, isActivityDone }) {
+function ReportView({ families, activities, logs, notes, memberPct, familyStats, eventTypes, attendance, memberAttendanceStats, attendanceDatesFor, exportExcel, printReport, isActivityDone, weeklyHistory }) {
   const [openFamily, setOpenFamily] = useState(null);
   const [mode, setMode] = useState("family"); // family | age | attendance
   const [soloPrintId, setSoloPrintId] = useState(null);
@@ -1518,8 +1793,32 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
       >
         <ClipboardCheck size={13} /> ഹാജർ
       </button>
+      <button
+        onClick={() => setMode("history")}
+        className="px-3 py-1.5 rounded-full flex items-center gap-1.5"
+        style={{
+          background: mode === "history" ? "#D9A94E" : "transparent",
+          color: mode === "history" ? "#151B26" : "#9AA5B1",
+          border: "1px solid rgba(217,169,78,0.3)",
+        }}
+      >
+        <Archive size={13} /> ചരിത്രം
+      </button>
     </div>
   );
+
+  if (mode === "history") {
+    return (
+      <div>
+        <h2 className="display-font text-xl mb-2" style={{ color: "#EDE7D9" }}>
+          ആഴ്ചതോറുമുള്ള ചരിത്രം
+        </h2>
+        {exportToolbar}
+        {modeToggle}
+        <HistoryReport weeklyHistory={weeklyHistory} />
+      </div>
+    );
+  }
 
   if (mode === "age") {
     return (
@@ -1677,6 +1976,82 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
           </div>
         );
       })}
+    </div>
+  );
+}
+
+function HistoryReport({ weeklyHistory }) {
+  const [openWeek, setOpenWeek] = useState(null);
+
+  if (!weeklyHistory || weeklyHistory.length === 0) {
+    return (
+      <p className="text-sm" style={{ color: "#9AA5B1" }}>
+        ഇതുവരെ ഒരു ആഴ്ചയും ആർക്കൈവ് ചെയ്തിട്ടില്ല. Track പേജിൽ "ആഴ്ച ആർക്കൈവ് ചെയ്യുക" ഞെക്കി തുടങ്ങാം.
+      </p>
+    );
+  }
+
+  const weeks = weeklyHistory.slice(-12);
+  const avgFor = (w) => {
+    if (!w.entries.length) return 0;
+    return Math.round(w.entries.reduce((s, e) => s + e.pct, 0) / w.entries.length);
+  };
+  const chartW = Math.max(weeks.length * 44, 200);
+  const chartH = 140;
+
+  return (
+    <div>
+      <div className="rounded-2xl p-4 card-edge mb-4 overflow-x-auto" style={{ background: "#1B2330" }}>
+        <svg width={chartW} height={chartH + 24} viewBox={`0 0 ${chartW} ${chartH + 24}`}>
+          {[0, 25, 50, 75, 100].map((y) => (
+            <line key={y} x1="0" y1={chartH - (y / 100) * chartH} x2={chartW} y2={chartH - (y / 100) * chartH} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+          ))}
+          {weeks.map((w, i) => {
+            const pct = avgFor(w);
+            const barH = (pct / 100) * chartH;
+            const x = i * 44 + 10;
+            return (
+              <g key={w.id}>
+                <rect x={x} y={chartH - barH} width="24" height={barH} rx="4" fill={pctColor(pct)} opacity="0.85" />
+                <text x={x + 12} y={chartH + 14} textAnchor="middle" fontSize="9" fill="#9AA5B1">
+                  {w.date.slice(5)}
+                </text>
+                <text x={x + 12} y={chartH - barH - 4} textAnchor="middle" fontSize="9" fill="#EDE7D9" className="num-font">
+                  {pct}%
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
+
+      <div className="space-y-2">
+        {[...weeks].reverse().map((w) => {
+          const isOpen = openWeek === w.id;
+          return (
+            <div key={w.id} className="rounded-xl card-edge overflow-hidden" style={{ background: "#1B2330" }}>
+              <button onClick={() => setOpenWeek(isOpen ? null : w.id)} className="w-full flex items-center justify-between px-4 py-3">
+                <span className="text-sm num-font" style={{ color: "#EDE7D9" }}>{fmtDate(w.date)}</span>
+                <div className="flex items-center gap-2">
+                  <span className="num-font text-sm font-semibold" style={{ color: pctColor(avgFor(w)) }}>{avgFor(w)}%</span>
+                  {isOpen ? <ChevronUp size={16} style={{ color: "#9AA5B1" }} /> : <ChevronDown size={16} style={{ color: "#9AA5B1" }} />}
+                </div>
+              </button>
+              {isOpen && (
+                <div className="px-4 pb-3">
+                  <div className="h-px mb-2" style={{ background: "rgba(217,169,78,0.14)" }} />
+                  {w.entries.map((e) => (
+                    <div key={e.familyId} className="flex items-center justify-between text-xs py-1">
+                      <span style={{ color: "#9AA5B1" }}>{e.familyName}</span>
+                      <span className="num-font" style={{ color: pctColor(e.pct) }}>{e.pct}%</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
