@@ -217,6 +217,7 @@ const Lock = (p) => (
 
 
 
+
 // ---------------- constants ----------------
 const AGE_GROUPS = [
   { id: "infant", label: "ശിശു", sub: "0–5", icon: Baby },
@@ -932,6 +933,23 @@ function Fellowship() {
   const exportExcel = () => {
     const wb = XLSX.utils.book_new();
 
+    // Overall (all families) summary — one row
+    const overallRow = {
+      കുടുംബങ്ങൾ: communityStats.familyCount,
+      അംഗങ്ങൾ: communityStats.memberCount,
+      "ശരാശരി പുരോഗതി %": communityStats.avgPct,
+      തീയതി: todayStr(),
+    };
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet([overallRow]), "മൊത്തം സംഗ്രഹം");
+
+    // Per-family summary — one row per family
+    const famSummaryRows = families.map((f) => {
+      const stats = familyStats(f);
+      return { കുടുംബം: f.name, അംഗങ്ങൾ: f.members.length, "പൂർത്തിയായത്": stats.done, "മൊത്തം": stats.total, "%": stats.pct };
+    });
+    if (famSummaryRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(famSummaryRows), "കുടുംബ സംഗ്രഹം");
+
+    // Per-individual detail — one row per member
     const famRows = [];
     families.forEach((f) => {
       f.members.forEach((m) => {
@@ -946,7 +964,7 @@ function Fellowship() {
         famRows.push(row);
       });
     });
-    if (famRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(famRows), "Activities");
+    if (famRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(famRows), "വ്യക്തിഗത പ്രവർത്തനങ്ങൾ");
 
     const attRows = [];
     eventTypes.forEach((et) => {
@@ -2103,6 +2121,7 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
   const [openFamily, setOpenFamily] = useState(null);
   const [mode, setMode] = useState("family"); // family | age | attendance
   const [soloPrintId, setSoloPrintId] = useState(null);
+  const [printAllOpen, setPrintAllOpen] = useState(false);
 
   useEffect(() => {
     if (!soloPrintId) return;
@@ -2114,6 +2133,18 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
       window.removeEventListener("afterprint", handler);
     };
   }, [soloPrintId]);
+
+  useEffect(() => {
+    if (!printAllOpen) return;
+    const handler = () => setPrintAllOpen(false);
+    window.addEventListener("afterprint", handler);
+    return () => window.removeEventListener("afterprint", handler);
+  }, [printAllOpen]);
+
+  const printAllFamilies = () => {
+    setPrintAllOpen(true);
+    setTimeout(() => window.print(), 60);
+  };
 
   const printFamily = (familyId) => {
     setOpenFamily(familyId);
@@ -2164,7 +2195,7 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
         <FileSpreadsheet size={13} /> എല്ലാ കുടുംബങ്ങളും — Excel
       </button>
       <button
-        onClick={printReport}
+        onClick={mode === "family" ? printAllFamilies : printReport}
         className="px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 card-edge"
         style={{ color: "#D9A94E", background: "#1B2330" }}
       >
@@ -2278,7 +2309,7 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
         if (soloPrintId && soloPrintId !== family.id) return null;
         const stats = familyStats(family);
         const byGroup = AGE_GROUPS.map((g) => ({ ...g, members: family.members.filter((m) => m.ageGroup === g.id) })).filter((g) => g.members.length > 0);
-        const isOpen = openFamily === family.id;
+        const isOpen = printAllOpen || openFamily === family.id;
 
         return (
           <div key={family.id} className="rounded-2xl card-edge overflow-hidden" style={{ background: "#1B2330" }}>
