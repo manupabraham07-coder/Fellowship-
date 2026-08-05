@@ -32,6 +32,16 @@ const DEFAULT_EVENT_TYPES = ["ഞായർ ആരാധന"];
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const todayStr = () => new Date().toISOString().slice(0, 10);
+// Waits for the browser to actually paint the new DOM (two animation frames,
+// plus a small fallback delay) before calling window.print() — a fixed
+// setTimeout alone can sometimes fire before React's update is on screen.
+const triggerPrintAfterPaint = () => {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      setTimeout(() => window.print(), 50);
+    });
+  });
+};
 const fmtDate = (d) => {
   const dt = new Date(d + "T00:00:00");
   return dt.toLocaleDateString("ml-IN", { day: "numeric", month: "short", year: "numeric" });
@@ -621,11 +631,10 @@ export default function Fellowship() {
 
   useEffect(() => {
     if (!soloMemberPrintId) return;
-    const t = setTimeout(() => window.print(), 60);
+    triggerPrintAfterPaint();
     const handler = () => setSoloMemberPrintId(null);
     window.addEventListener("afterprint", handler);
     return () => {
-      clearTimeout(t);
       window.removeEventListener("afterprint", handler);
     };
   }, [soloMemberPrintId]);
@@ -1914,11 +1923,10 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
 
   useEffect(() => {
     if (!soloPrintId) return;
-    const t = setTimeout(() => window.print(), 60);
+    triggerPrintAfterPaint();
     const handler = () => setSoloPrintId(null);
     window.addEventListener("afterprint", handler);
     return () => {
-      clearTimeout(t);
       window.removeEventListener("afterprint", handler);
     };
   }, [soloPrintId]);
@@ -1932,7 +1940,7 @@ function ReportView({ families, activities, logs, notes, memberPct, familyStats,
 
   const printAllFamilies = () => {
     setPrintAllOpen(true);
-    setTimeout(() => window.print(), 60);
+    triggerPrintAfterPaint();
   };
 
   const printFamily = (familyId) => {
